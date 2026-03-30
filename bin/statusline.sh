@@ -203,3 +203,57 @@ if [ -n "$input" ]; then
 fi
 
 pct_color=$(color_for_pct "$pct")
+
+# ── Load peak hours config ─────────────────────────────
+CONFIG_URL="https://raw.githubusercontent.com/nickywan/claude-peak-hours/main/peak-hours.json"
+CONFIG_CACHE="/tmp/claude/peak-hours-config.json"
+CONFIG_CACHE_TTL=3600
+
+# Hardcoded fallback
+FALLBACK_CONFIG='{"version":2,"peak_windows":[{"days":[1,2,3,4,5],"start_utc":12,"end_utc":18}]}'
+
+mkdir -p /tmp/claude 2>/dev/null
+
+load_config() {
+    local config=""
+    local needs_fetch=true
+
+    # Check cache
+    if [ -f "$CONFIG_CACHE" ]; then
+        local cache_mtime
+        if $IS_GNU; then
+            cache_mtime=$(stat -c %Y "$CONFIG_CACHE" 2>/dev/null)
+        else
+            cache_mtime=$(stat -f %m "$CONFIG_CACHE" 2>/dev/null)
+        fi
+        local cache_age=$(( $(date +%s) - cache_mtime ))
+        if [ "$cache_age" -lt "$CONFIG_CACHE_TTL" ]; then
+            needs_fetch=false
+            config=$(cat "$CONFIG_CACHE" 2>/dev/null)
+        fi
+    fi
+
+    # Fetch if needed
+    if $needs_fetch; then
+        local response
+        response=$(curl -s --max-time 3 "$CONFIG_URL" 2>/dev/null)
+        if [ -n "$response" ] && echo "$response" | jq -e '.peak_windows' >/dev/null 2>&1; then
+            config="$response"
+            echo "$response" > "$CONFIG_CACHE"
+        fi
+    fi
+
+    # Fallback to stale cache
+    if [ -z "$config" ] && [ -f "$CONFIG_CACHE" ]; then
+        config=$(cat "$CONFIG_CACHE" 2>/dev/null)
+    fi
+
+    # Fallback to hardcoded
+    if [ -z "$config" ] || ! echo "$config" | jq -e '.peak_windows' >/dev/null 2>&1; then
+        config="$FALLBACK_CONFIG"
+    fi
+
+    echo "$config"
+}
+
+PEAK_CONFIG=$(load_config)
