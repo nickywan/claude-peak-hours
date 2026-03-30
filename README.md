@@ -1,8 +1,13 @@
 # claude-peak-hours
 
-A Claude Code statusline that shows whether you're in **peak** or **off-peak** hours, with a countdown to the next transition.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)]()
 
-During peak hours (12:00–18:00 UTC / 8AM–2PM ET on weekdays), Anthropic applies stricter session limits. This statusline shows you exactly when you're in peak, when it changes, and helps you plan your usage.
+A [Claude Code](https://claude.ai/code) statusline plugin that shows whether you're in **peak** or **off-peak** hours, with a countdown to the next transition.
+
+During peak hours (12:00-18:00 UTC / 8AM-2PM ET on weekdays), Anthropic applies stricter session limits and tokens are consumed faster. This statusline shows you exactly when you're in peak, when it changes, and helps you plan your usage.
+
+Inspired by [isclaude-2x](https://github.com/Adiazgallici/isclaude-2x).
 
 ## Install
 
@@ -100,6 +105,21 @@ Falls back to hardcoded defaults (Mon-Fri 12:00-18:00 UTC) if the fetch fails.
 - **jq** -- `brew install jq` or `sudo apt install jq`
 - **curl** -- pre-installed on most systems
 
+## Contributing
+
+This project is not open to external contributions. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+If you notice Anthropic changed their peak hours, please [open an issue](https://github.com/nickywan/claude-peak-hours/issues) and we'll update the config.
+
+## Security
+
+This is a read-only statusline plugin. It does **not**:
+- Send your data anywhere (the OAuth API call goes to Anthropic's official endpoint only)
+- Store credentials (it reads existing Claude Code OAuth tokens)
+- Modify your code or files (except `~/.claude/settings.json` and `~/.claude/statusline.sh` during install)
+
+If you find a security issue, please open a [private security advisory](https://github.com/nickywan/claude-peak-hours/security/advisories/new) instead of a public issue.
+
 ## License
 
-MIT
+[MIT](LICENSE)
