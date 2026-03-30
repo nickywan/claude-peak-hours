@@ -404,3 +404,151 @@ if [ "$MODE" = "minimal" ]; then
     printf "%b" "$line1"
     exit 0
 fi
+
+# ════════════════════════════════════════════════════════
+# FULL MODE — timeline + rate limits
+# ════════════════════════════════════════════════════════
+
+# ── Timeline bar ───────────────────────────────────────
+timeline_section=""
+
+# Check if today has any peak hours
+TODAY_HAS_PEAK=0
+
+for ((w=0; w<NUM_WINDOWS; w++)); do
+    W_START=$(echo "$PEAK_CONFIG" | jq -r ".peak_windows[$w].start_utc")
+    W_END=$(echo "$PEAK_CONFIG" | jq -r ".peak_windows[$w].end_utc")
+    W_DAYS=$(echo "$PEAK_CONFIG" | jq -r ".peak_windows[$w].days[]")
+
+    for d in $W_DAYS; do
+        [ "$d" -eq "$UTC_DOW" ] && TODAY_HAS_PEAK=1
+    done
+done
+
+cursor_pos=$((LOCAL_HOUR * 2 + (LOCAL_MIN >= 30 ? 1 : 0)))
+
+bar=""
+for ((i=0; i<48; i++)); do
+    h=$((i / 2))
+    utc_h=$(( (h - TZ_DIFF_H + 24) % 24 ))
+
+    is_peak_slot=0
+    for ((w=0; w<NUM_WINDOWS; w++)); do
+        W_START=$(echo "$PEAK_CONFIG" | jq -r ".peak_windows[$w].start_utc")
+        W_END=$(echo "$PEAK_CONFIG" | jq -r ".peak_windows[$w].end_utc")
+        W_DAYS=$(echo "$PEAK_CONFIG" | jq -r ".peak_windows[$w].days[]")
+        for d in $W_DAYS; do
+            if [ "$d" -eq "$UTC_DOW" ]; then
+                if [ "$W_END" -gt "$W_START" ]; then
+                    [ "$utc_h" -ge "$W_START" ] && [ "$utc_h" -lt "$W_END" ] && is_peak_slot=1
+                else
+                    ([ "$utc_h" -ge "$W_START" ] || [ "$utc_h" -lt "$W_END" ]) && is_peak_slot=1
+                fi
+            fi
+        done
+    done
+
+    if [ "$i" -eq "$cursor_pos" ]; then
+        bar+="${white}${bold}●${reset}"
+    elif [ "$is_peak_slot" -eq 1 ]; then
+        bar+="${yellow}━${reset}"
+    else
+        bar+="${green}━${reset}"
+    fi
+done
+
+if [ "$TODAY_HAS_PEAK" -eq 0 ]; then
+    timeline_section="${dim}${L_TODAY}${reset}  ${bar}  ${green}━${reset}${dim} ${L_OFFPEAK} ${L_ALLDAY}${reset}  ${white}${bold}●${reset}${dim} ${L_NOW}${reset}"
+else
+    first_start=$(echo "$PEAK_CONFIG" | jq -r ".peak_windows[0].start_utc")
+    first_end=$(echo "$PEAK_CONFIG" | jq -r ".peak_windows[0].end_utc")
+    ps_local=$(( (first_start + TZ_DIFF_H + 24) % 24 ))
+    pe_local=$(( (first_end + TZ_DIFF_H + 24) % 24 ))
+    ps_label=$(fmt_hour $ps_local)
+    pe_label=$(fmt_hour $pe_local)
+    timeline_section="${dim}${L_TODAY}${reset}  ${bar}  ${green}━${reset}${dim} ${L_OFFPEAK}${reset} ${yellow}━${reset}${dim} ${L_PEAK} ${ps_label}-${pe_label}${reset}  ${white}${bold}●${reset}${dim} ${L_NOW}${reset}"
+fi
+
+# ── OAuth token ─────────────────────────────────────────
+get_oauth_token() {
+    if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then echo "$CLAUDE_CODE_OAUTH_TOKEN"; return 0; fi
+    if command -v security >/dev/null 2>&1; then
+        local blob token
+        blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
+        if [ -n "$blob" ]; then
+            token=$(echo "$blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+            [ -n "$token" ] && [ "$token" != "null" ] && { echo "$token"; return 0; }
+        fi
+    fi
+    local creds_file="${HOME}/.claude/.credentials.json"
+    if [ -f "$creds_file" ]; then
+        local token
+        token=$(jq -r '.claudeAiOauth.accessToken // empty' "$creds_file" 2>/dev/null)
+        [ -n "$token" ] && [ "$token" != "null" ] && { echo "$token"; return 0; }
+    fi
+    echo ""
+}
+
+# ── Usage data (cached 60s) ────────────────────────────
+usage_cache="/tmp/claude/statusline-usage-cache.json"
+usage_cache_ttl=60
+
+needs_refresh=true
+usage_data=""
+if [ -f "$usage_cache" ]; then
+    if $IS_GNU; then
+        cache_mtime=$(stat -c %Y "$usage_cache" 2>/dev/null)
+    else
+        cache_mtime=$(stat -f %m "$usage_cache" 2>/dev/null)
+    fi
+    cache_age=$(( $(date +%s) - cache_mtime ))
+    if [ "$cache_age" -lt "$usage_cache_ttl" ]; then
+        needs_refresh=false
+        usage_data=$(cat "$usage_cache" 2>/dev/null)
+    fi
+fi
+
+if $needs_refresh; then
+    token=$(get_oauth_token)
+    if [ -n "$token" ] && [ "$token" != "null" ]; then
+        response=$(curl -s --max-time 5 \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $token" \
+            -H "anthropic-beta: oauth-2025-04-20" \
+            -H "User-Agent: claude-code/2.1.34" \
+            "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
+        if [ -n "$response" ] && echo "$response" | jq -e '.five_hour' >/dev/null 2>&1; then
+            usage_data="$response"
+            echo "$response" > "$usage_cache"
+        fi
+    fi
+    [ -z "$usage_data" ] && [ -f "$usage_cache" ] && usage_data=$(cat "$usage_cache" 2>/dev/null)
+fi
+
+# ── Rate limits line ────────────────────────────────────
+rate_line=""
+if [ -n "$usage_data" ] && echo "$usage_data" | jq -e . >/dev/null 2>&1; then
+    bw=10
+
+    fh_pct=$(echo "$usage_data" | jq -r '.five_hour.utilization // 0' | awk '{printf "%.0f", $1}')
+    fh_reset=$(format_reset_time "$(echo "$usage_data" | jq -r '.five_hour.resets_at // empty')")
+    fh_bar=$(build_usage_bar "$fh_pct" "$bw")
+    fh_color=$(color_for_pct "$fh_pct")
+
+    sd_pct=$(echo "$usage_data" | jq -r '.seven_day.utilization // 0' | awk '{printf "%.0f", $1}')
+    sd_reset=$(format_reset_time "$(echo "$usage_data" | jq -r '.seven_day.resets_at // empty')")
+    sd_bar=$(build_usage_bar "$sd_pct" "$bw")
+    sd_color=$(color_for_pct "$sd_pct")
+
+    rate_line="${white}${L_CURRENT}${reset} ${fh_bar} ${fh_color}$(printf '%3d' "$fh_pct")%${reset} ${dim}⟳${reset} ${white}${fh_reset}${reset}"
+    rate_line+="${sep}"
+    rate_line+="${white}${L_WEEKLY}${reset}  ${sd_bar} ${sd_color}$(printf '%3d' "$sd_pct")%${reset} ${dim}⟳${reset} ${white}${sd_reset}${reset}"
+fi
+
+# ── Final output ────────────────────────────────────────
+printf "%b" "$line1"
+[ -n "$timeline_section" ] && printf "\n\n%b" "$timeline_section"
+[ -n "$rate_line" ] && printf "\n%b" "$rate_line"
+
+exit 0
