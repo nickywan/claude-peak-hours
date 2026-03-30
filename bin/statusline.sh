@@ -366,3 +366,41 @@ remaining_today=$(( 86400 - (LOCAL_HOUR * 3600 + LOCAL_MIN * 60) ))
 if [ "$SECS_UNTIL" -ge "$remaining_today" ]; then
     NEXT_IS_DIFFERENT_DAY=1
 fi
+
+# ── Build peak status section ──────────────────────────
+peak_section=""
+LOCAL_TIME=$(fmt_local_time "$SECS_UNTIL")
+DURATION=$(fmt_duration "$SECS_UNTIL")
+
+if [ "$IS_PEAK" -eq 1 ]; then
+    # Currently peak — show when off-peak starts
+    if [ "$NEXT_IS_DIFFERENT_DAY" -eq 1 ]; then
+        days_ahead=$(( (SECS_UNTIL + LOCAL_HOUR * 3600 + LOCAL_MIN * 60) / 86400 ))
+        target_local_dow=$(( (LOCAL_DOW - 1 + days_ahead) % 7 + 1 ))
+        day_label="${L_DAYS[$target_local_dow]}"
+        peak_section="${red}${bold}${L_PEAK}${reset} ${dim}~${reset} ${green}${L_OFFPEAK} ${day_label} ${LOCAL_TIME}${reset} ${dim}(${DURATION})${reset}"
+    else
+        peak_section="${red}${bold}${L_PEAK}${reset} ${dim}~${reset} ${green}${L_OFFPEAK} ${LOCAL_TIME}${reset} ${dim}(${DURATION})${reset}"
+    fi
+else
+    # Currently off-peak — show when peak starts
+    if [ "$NEXT_IS_DIFFERENT_DAY" -eq 1 ]; then
+        days_ahead=$(( (SECS_UNTIL + LOCAL_HOUR * 3600 + LOCAL_MIN * 60) / 86400 ))
+        target_local_dow=$(( (LOCAL_DOW - 1 + days_ahead) % 7 + 1 ))
+        day_label="${L_DAYS[$target_local_dow]}"
+        peak_section="${green}${bold}⚡ ${L_OFFPEAK}${reset} ${dim}~${reset} ${red}${L_PEAK} ${day_label} ${LOCAL_TIME}${reset} ${dim}(${DURATION})${reset}"
+    else
+        peak_section="${green}${bold}⚡ ${L_OFFPEAK}${reset} ${dim}~${reset} ${red}${L_PEAK} ${LOCAL_TIME}${reset} ${dim}(${DURATION})${reset}"
+    fi
+fi
+
+# ── LINE 1 ──────────────────────────────────────────────
+line1="${blue}${model_name}${reset}${sep}${pct_color}${pct}%${reset}${sep}${peak_section}"
+
+# ════════════════════════════════════════════════════════
+# MINIMAL MODE
+# ════════════════════════════════════════════════════════
+if [ "$MODE" = "minimal" ]; then
+    printf "%b" "$line1"
+    exit 0
+fi
