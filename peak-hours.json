@@ -1,0 +1,6 @@
+{
+  "version": 2,
+  "peak_windows": [
+    { "days": [1, 2, 3, 4, 5], "start_utc": 12, "end_utc": 18 }
+  ]
+}

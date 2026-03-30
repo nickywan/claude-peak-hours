@@ -1,0 +1,17 @@
+{
+  "name": "claude-peak-hours",
+  "version": "1.0.0",
+  "description": "Claude Code statusline showing peak/off-peak hours with countdown",
+  "bin": {
+    "claude-peak-hours": "bin/install.js"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "statusline",
+    "peak-hours",
+    "cli"
+  ],
+  "license": "MIT",
+  "author": "nickywan"
+}
