@@ -107,9 +107,9 @@ Falls back to hardcoded defaults (Mon-Fri 12:00-18:00 UTC) if the fetch fails.
 
 ## Contributing
 
-Contributions are welcome! Please open an issue first to discuss what you'd like to change.
+This project is not open to external contributions. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
-If Anthropic changes peak hours, you can submit a PR updating `peak-hours.json` -- all users will pick up the change automatically within 1 hour.
+If you notice Anthropic changed their peak hours, please [open an issue](https://github.com/nickywan/claude-peak-hours/issues) and we'll update the config.
 
 ## Security
 

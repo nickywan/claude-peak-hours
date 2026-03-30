@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck statusline.sh
+        uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          scandir: bin
+          severity: warning
+
+      - name: Validate peak-hours.json
+        run: jq empty peak-hours.json
+
+      - name: Validate package.json
+        run: node -e "JSON.parse(require('fs').readFileSync('package.json','utf8'))"
+
+      - name: Check install.js syntax
+        run: node --check bin/install.js
+
+  test:
+    name: Integration test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Test minimal mode (EN, 12h)
+        run: |
+          output=$(echo '{"model":{"display_name":"Opus 4.6"},"context_window":{"context_window_size":200000,"current_usage":{"input_tokens":78000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}' | bash bin/statusline.sh --lang en --12h)
+          [ -n "$output" ] && echo "PASS: minimal EN" || (echo "FAIL: no output" && exit 1)
+
+      - name: Test minimal mode (FR, 24h)
+        run: |
+          output=$(echo '{}' | bash bin/statusline.sh --lang fr --24h)
+          [ -n "$output" ] && echo "PASS: minimal FR" || (echo "FAIL: no output" && exit 1)
+
+      - name: Test full mode
+        run: |
+          output=$(echo '{}' | bash bin/statusline.sh --full --lang en --24h)
+          [ -n "$output" ] && echo "PASS: full mode" || (echo "FAIL: no output" && exit 1)
+
+      - name: Test empty stdin
+        run: |
+          output=$(echo '{}' | bash bin/statusline.sh)
+          [ -n "$output" ] && echo "PASS: empty stdin" || (echo "FAIL: no output" && exit 1)
