@@ -188,21 +188,49 @@ format_reset_time() {
     printf "%s %s, %s" "${L_MONTHS[$month_idx]}" "$day_num" "$time_str"
 }
 
-# ── Parse stdin (model, context) ───────────────────────
+# ── Parse stdin (model, context, cwd, rate limits) ─────
 model_name="Claude"
 pct=0
+remaining_pct=100
+cwd_display=""
+rl_five_hour_pct=0
+rl_five_hour_resets=""
+rl_seven_day_pct=0
+rl_seven_day_resets=""
+
 if [ -n "$input" ]; then
     model_name=$(echo "$input" | jq -r '.model.display_name // "Claude"' 2>/dev/null)
-    size=$(echo "$input" | jq -r '.context_window.context_window_size // 200000' 2>/dev/null)
-    [ "$size" -eq 0 ] 2>/dev/null && size=200000
-    it=$(echo "$input" | jq -r '.context_window.current_usage.input_tokens // 0' 2>/dev/null)
-    cc=$(echo "$input" | jq -r '.context_window.current_usage.cache_creation_input_tokens // 0' 2>/dev/null)
-    cr=$(echo "$input" | jq -r '.context_window.current_usage.cache_read_input_tokens // 0' 2>/dev/null)
-    current=$(( it + cc + cr ))
-    [ "$size" -gt 0 ] 2>/dev/null && pct=$(( current * 100 / size )) || pct=0
+
+    # Context window — remaining %
+    remaining_pct=$(echo "$input" | jq -r '.context_window.remaining_percentage // 100' 2>/dev/null)
+    pct=$((100 - remaining_pct))
+
+    # Current working directory — shorten with ~ and truncate
+    raw_cwd=$(echo "$input" | jq -r '.cwd // ""' 2>/dev/null)
+    if [ -n "$raw_cwd" ]; then
+        cwd_display="${raw_cwd/#$HOME/\~}"
+        # Truncate to last 3 path components if too long
+        if [ "${#cwd_display}" -gt 40 ]; then
+            cwd_display="~/.../$(echo "$cwd_display" | rev | cut -d'/' -f1-3 | rev)"
+        fi
+    fi
+
+    # Rate limits from stdin (no OAuth call needed)
+    rl_five_hour_pct=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // 0' 2>/dev/null | awk '{printf "%.0f", $1}')
+    rl_five_hour_resets=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // 0' 2>/dev/null)
+    rl_seven_day_pct=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // 0' 2>/dev/null | awk '{printf "%.0f", $1}')
+    rl_seven_day_resets=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at // 0' 2>/dev/null)
 fi
 
-pct_color=$(color_for_pct "$pct")
+# Color based on remaining % (invert: low remaining = danger)
+remaining_color() {
+    local r=$1
+    if [ "$r" -le 10 ]; then printf "$red"
+    elif [ "$r" -le 30 ]; then printf "$yellow"
+    elif [ "$r" -le 50 ]; then printf "$orange"
+    else printf "$green"; fi
+}
+pct_color=$(remaining_color "$remaining_pct")
 
 # ── Load peak hours config ─────────────────────────────
 CONFIG_URL="https://raw.githubusercontent.com/nickywan/claude-peak-hours/main/peak-hours.json"
@@ -395,7 +423,9 @@ else
 fi
 
 # ── LINE 1 ──────────────────────────────────────────────
-line1="${blue}${model_name}${reset}${sep}${pct_color}${pct}%${reset}${sep}${peak_section}"
+cwd_section=""
+[ -n "$cwd_display" ] && cwd_section="${sep}${cyan}${cwd_display}${reset}"
+line1="${blue}${model_name}${reset}${cwd_section}${sep}${pct_color}${remaining_pct}% free${reset}${sep}${peak_section}"
 
 # ════════════════════════════════════════════════════════
 # MINIMAL MODE
@@ -469,81 +499,54 @@ else
     timeline_section="${dim}${L_TODAY}${reset}  ${bar}  ${green}━${reset}${dim} ${L_OFFPEAK}${reset} ${yellow}━${reset}${dim} ${L_PEAK} ${ps_label}-${pe_label}${reset}  ${white}${bold}●${reset}${dim} ${L_NOW}${reset}"
 fi
 
-# ── OAuth token ─────────────────────────────────────────
-get_oauth_token() {
-    if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then echo "$CLAUDE_CODE_OAUTH_TOKEN"; return 0; fi
-    if command -v security >/dev/null 2>&1; then
-        local blob token
-        blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
-        if [ -n "$blob" ]; then
-            token=$(echo "$blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
-            [ -n "$token" ] && [ "$token" != "null" ] && { echo "$token"; return 0; }
-        fi
-    fi
-    local creds_file="${HOME}/.claude/.credentials.json"
-    if [ -f "$creds_file" ]; then
-        local token
-        token=$(jq -r '.claudeAiOauth.accessToken // empty' "$creds_file" 2>/dev/null)
-        [ -n "$token" ] && [ "$token" != "null" ] && { echo "$token"; return 0; }
-    fi
-    echo ""
-}
-
-# ── Usage data (cached 60s) ────────────────────────────
-usage_cache="/tmp/claude/statusline-usage-cache.json"
-usage_cache_ttl=60
-
-needs_refresh=true
-usage_data=""
-if [ -f "$usage_cache" ]; then
-    if $IS_GNU; then
-        cache_mtime=$(stat -c %Y "$usage_cache" 2>/dev/null)
-    else
-        cache_mtime=$(stat -f %m "$usage_cache" 2>/dev/null)
-    fi
-    cache_age=$(( $(date +%s) - cache_mtime ))
-    if [ "$cache_age" -lt "$usage_cache_ttl" ]; then
-        needs_refresh=false
-        usage_data=$(cat "$usage_cache" 2>/dev/null)
-    fi
-fi
-
-if $needs_refresh; then
-    token=$(get_oauth_token)
-    if [ -n "$token" ] && [ "$token" != "null" ]; then
-        response=$(curl -s --max-time 5 \
-            -H "Accept: application/json" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $token" \
-            -H "anthropic-beta: oauth-2025-04-20" \
-            -H "User-Agent: claude-code/2.1.34" \
-            "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
-        if [ -n "$response" ] && echo "$response" | jq -e '.five_hour' >/dev/null 2>&1; then
-            usage_data="$response"
-            echo "$response" > "$usage_cache"
-        fi
-    fi
-    [ -z "$usage_data" ] && [ -f "$usage_cache" ] && usage_data=$(cat "$usage_cache" 2>/dev/null)
-fi
-
-# ── Rate limits line ────────────────────────────────────
+# ── Rate limits (from stdin) ────────────────────────────
 rate_line=""
-if [ -n "$usage_data" ] && echo "$usage_data" | jq -e . >/dev/null 2>&1; then
+if [ "$rl_five_hour_pct" -gt 0 ] 2>/dev/null || [ "$rl_seven_day_pct" -gt 0 ] 2>/dev/null; then
     bw=10
 
-    fh_pct=$(echo "$usage_data" | jq -r '.five_hour.utilization // 0' | awk '{printf "%.0f", $1}')
-    fh_reset=$(format_reset_time "$(echo "$usage_data" | jq -r '.five_hour.resets_at // empty')")
-    fh_bar=$(build_usage_bar "$fh_pct" "$bw")
-    fh_color=$(color_for_pct "$fh_pct")
+    fh_bar=$(build_usage_bar "$rl_five_hour_pct" "$bw")
+    fh_color=$(color_for_pct "$rl_five_hour_pct")
+    fh_reset_str=""
+    if [ "$rl_five_hour_resets" -gt 0 ] 2>/dev/null; then
+        local_reset_secs=$((rl_five_hour_resets - NOW))
+        if [ "$local_reset_secs" -gt 0 ]; then
+            fh_reset_str=$(fmt_local_time "$local_reset_secs")
+        fi
+    fi
 
-    sd_pct=$(echo "$usage_data" | jq -r '.seven_day.utilization // 0' | awk '{printf "%.0f", $1}')
-    sd_reset=$(format_reset_time "$(echo "$usage_data" | jq -r '.seven_day.resets_at // empty')")
-    sd_bar=$(build_usage_bar "$sd_pct" "$bw")
-    sd_color=$(color_for_pct "$sd_pct")
+    sd_bar=$(build_usage_bar "$rl_seven_day_pct" "$bw")
+    sd_color=$(color_for_pct "$rl_seven_day_pct")
+    sd_reset_str=""
+    if [ "$rl_seven_day_resets" -gt 0 ] 2>/dev/null; then
+        local_reset_secs=$((rl_seven_day_resets - NOW))
+        if [ "$local_reset_secs" -gt 0 ]; then
+            # For weekly, show date + time
+            if $IS_GNU; then
+                month_idx=$(date -d "@$rl_seven_day_resets" +%-m 2>/dev/null)
+                day_num=$(date -d "@$rl_seven_day_resets" +%-d 2>/dev/null)
+                if [ "$TIME_FMT" = "24h" ]; then
+                    time_part=$(date -d "@$rl_seven_day_resets" +"%H:%M" 2>/dev/null)
+                else
+                    time_part=$(LC_TIME=C date -d "@$rl_seven_day_resets" +"%l:%M%p" 2>/dev/null | sed 's/^ //' | tr '[:upper:]' '[:lower:]')
+                fi
+            else
+                month_idx=$(date -j -r "$rl_seven_day_resets" +%-m 2>/dev/null)
+                day_num=$(date -j -r "$rl_seven_day_resets" +%-d 2>/dev/null)
+                if [ "$TIME_FMT" = "24h" ]; then
+                    time_part=$(date -j -r "$rl_seven_day_resets" +"%H:%M" 2>/dev/null)
+                else
+                    time_part=$(LC_TIME=C date -j -r "$rl_seven_day_resets" +"%l:%M%p" 2>/dev/null | sed 's/^ //' | tr '[:upper:]' '[:lower:]')
+                fi
+            fi
+            sd_reset_str="${L_MONTHS[$month_idx]} ${day_num}, ${time_part}"
+        fi
+    fi
 
-    rate_line="${white}${L_CURRENT}${reset} ${fh_bar} ${fh_color}$(printf '%3d' "$fh_pct")%${reset} ${dim}⟳${reset} ${white}${fh_reset}${reset}"
+    rate_line="${white}${L_CURRENT}${reset} ${fh_bar} ${fh_color}$(printf '%3d' "$rl_five_hour_pct")%${reset}"
+    [ -n "$fh_reset_str" ] && rate_line+=" ${dim}⟳${reset} ${white}${fh_reset_str}${reset}"
     rate_line+="${sep}"
-    rate_line+="${white}${L_WEEKLY}${reset}  ${sd_bar} ${sd_color}$(printf '%3d' "$sd_pct")%${reset} ${dim}⟳${reset} ${white}${sd_reset}${reset}"
+    rate_line+="${white}${L_WEEKLY}${reset}  ${sd_bar} ${sd_color}$(printf '%3d' "$rl_seven_day_pct")%${reset}"
+    [ -n "$sd_reset_str" ] && rate_line+=" ${dim}⟳${reset} ${white}${sd_reset_str}${reset}"
 fi
 
 # ── Final output ────────────────────────────────────────
