@@ -257,3 +257,112 @@ load_config() {
 }
 
 PEAK_CONFIG=$(load_config)
+
+# ── Peak/Off-peak detection ────────────────────────────
+NOW=$(date +%s)
+UTC_HOUR=$(TZ=UTC date +%-H)
+UTC_MIN=$(TZ=UTC date +%-M)
+UTC_SEC=$(TZ=UTC date +%-S)
+UTC_DOW=$(TZ=UTC date +%u)
+UTC_SECS=$((UTC_HOUR * 3600 + UTC_MIN * 60 + UTC_SEC))
+
+LOCAL_HOUR=$(date +%-H)
+LOCAL_MIN=$(date +%-M)
+
+# Local-UTC offset in hours
+TZ_DIFF_H=$(( (LOCAL_HOUR - UTC_HOUR + 24) % 24 ))
+[ "$TZ_DIFF_H" -gt 12 ] && TZ_DIFF_H=$((TZ_DIFF_H - 24))
+
+IS_PEAK=0
+CURRENT_WINDOW_END_UTC=""
+NUM_WINDOWS=$(echo "$PEAK_CONFIG" | jq '.peak_windows | length')
+
+for ((w=0; w<NUM_WINDOWS; w++)); do
+    W_START=$(echo "$PEAK_CONFIG" | jq -r ".peak_windows[$w].start_utc")
+    W_END=$(echo "$PEAK_CONFIG" | jq -r ".peak_windows[$w].end_utc")
+    W_DAYS=$(echo "$PEAK_CONFIG" | jq -r ".peak_windows[$w].days[]")
+
+    # Check if current UTC day is in this window's days
+    day_match=0
+    for d in $W_DAYS; do
+        [ "$d" -eq "$UTC_DOW" ] && day_match=1
+    done
+
+    if [ "$day_match" -eq 1 ]; then
+        W_START_SECS=$((W_START * 3600))
+        W_END_SECS=$((W_END * 3600))
+
+        if [ "$W_END" -gt "$W_START" ]; then
+            # Normal window (no midnight crossing)
+            if [ "$UTC_SECS" -ge "$W_START_SECS" ] && [ "$UTC_SECS" -lt "$W_END_SECS" ]; then
+                IS_PEAK=1
+                CURRENT_WINDOW_END_UTC=$W_END
+            fi
+        else
+            # Midnight-crossing window (e.g., 22:00-02:00)
+            if [ "$UTC_SECS" -ge "$W_START_SECS" ] || [ "$UTC_SECS" -lt "$W_END_SECS" ]; then
+                IS_PEAK=1
+                CURRENT_WINDOW_END_UTC=$W_END
+            fi
+        fi
+    fi
+
+    # Also check: if window crosses midnight, check previous day's window applying to today
+    if [ "$day_match" -eq 0 ] && [ "$W_END" -lt "$W_START" ]; then
+        prev_dow=$(( (UTC_DOW - 2 + 7) % 7 + 1 ))
+        for d in $W_DAYS; do
+            if [ "$d" -eq "$prev_dow" ] && [ "$UTC_SECS" -lt "$((W_END * 3600))" ]; then
+                IS_PEAK=1
+                CURRENT_WINDOW_END_UTC=$W_END
+            fi
+        done
+    fi
+done
+
+# ── Countdown to next transition ───────────────────────
+SECS_UNTIL=0
+
+if [ "$IS_PEAK" -eq 1 ]; then
+    # Seconds until end of current window
+    END_SECS=$((CURRENT_WINDOW_END_UTC * 3600))
+    if [ "$END_SECS" -gt "$UTC_SECS" ]; then
+        SECS_UNTIL=$((END_SECS - UTC_SECS))
+    else
+        # Midnight crossing: end is tomorrow
+        SECS_UNTIL=$(( (86400 - UTC_SECS) + END_SECS ))
+    fi
+else
+    # Find nearest upcoming window start
+    BEST=999999999
+    for ((w=0; w<NUM_WINDOWS; w++)); do
+        W_START=$(echo "$PEAK_CONFIG" | jq -r ".peak_windows[$w].start_utc")
+        W_DAYS=$(echo "$PEAK_CONFIG" | jq -r ".peak_windows[$w].days[]")
+        W_START_SECS=$((W_START * 3600))
+
+        # Check today and next 7 days
+        for ((look=0; look<8; look++)); do
+            check_dow=$(( (UTC_DOW - 1 + look) % 7 + 1 ))
+            for d in $W_DAYS; do
+                if [ "$d" -eq "$check_dow" ]; then
+                    if [ "$look" -eq 0 ]; then
+                        candidate=$((W_START_SECS - UTC_SECS))
+                    else
+                        candidate=$(( (86400 - UTC_SECS) + (look - 1) * 86400 + W_START_SECS ))
+                    fi
+                    if [ "$candidate" -gt 0 ] && [ "$candidate" -lt "$BEST" ]; then
+                        BEST=$candidate
+                    fi
+                fi
+            done
+        done
+    done
+    SECS_UNTIL=$BEST
+fi
+
+# Is the next transition on a different day?
+NEXT_IS_DIFFERENT_DAY=0
+LOCAL_DOW=$(date +%u)
+remaining_today=$(( 86400 - (LOCAL_HOUR * 3600 + LOCAL_MIN * 60) ))
+if [ "$SECS_UNTIL" -ge "$remaining_today" ]; then
+    NEXT_IS_DIFFERENT_DAY=1
+fi
