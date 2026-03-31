@@ -1,9 +1,13 @@
 {
-  "name": "claude-peak-hours",
+  "name": "cc-peak-hours",
   "version": "1.0.0",
   "description": "Claude Code statusline showing peak/off-peak hours with countdown",
   "bin": {
-    "claude-peak-hours": "bin/install.js"
+    "cc-peak-hours": "bin/install.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nickywan/claude-peak-hours.git"
   },
   "keywords": [
     "claude",

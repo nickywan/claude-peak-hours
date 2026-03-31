@@ -148,9 +148,9 @@ function run() {
   log(`  Language:   ${blue}${lang || "auto-detect"}${reset}`);
   console.log();
   log(`  ${dim}Reconfigure anytime:${reset}`);
-  log(`  ${dim}  npx claude-peak-hours                         ${reset}${dim}← minimal${reset}`);
-  log(`  ${dim}  npx claude-peak-hours --full --24h --lang fr  ${reset}${dim}← full, 24h, French${reset}`);
-  log(`  ${dim}  npx claude-peak-hours --uninstall             ${reset}${dim}← restore previous${reset}`);
+  log(`  ${dim}  npx cc-peak-hours                         ${reset}${dim}← minimal${reset}`);
+  log(`  ${dim}  npx cc-peak-hours --full --24h --lang fr  ${reset}${dim}← full, 24h, French${reset}`);
+  log(`  ${dim}  npx cc-peak-hours --uninstall             ${reset}${dim}← restore previous${reset}`);
   console.log();
   log(`${green}Done!${reset} Restart Claude Code to see your new status line.`);
   console.log();

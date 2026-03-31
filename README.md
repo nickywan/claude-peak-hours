@@ -12,12 +12,8 @@ Inspired by [isclaude-2x](https://github.com/Adiazgallici/isclaude-2x).
 
 ## Install
 
-Clone and install:
-
 ```bash
-git clone https://github.com/nickywan/claude-peak-hours.git
-cd claude-peak-hours
-node bin/install.js
+npx cc-peak-hours
 ```
 
 Restart Claude Code after installing.
@@ -25,13 +21,13 @@ Restart Claude Code after installing.
 ### Options
 
 ```bash
-node bin/install.js                          # minimal (default)
-node bin/install.js --full                   # dashboard with timeline + rate limits
-node bin/install.js --24h                    # force 24h time format
-node bin/install.js --12h                    # force 12h time format
-node bin/install.js --lang fr                # French labels
-node bin/install.js --full --24h --lang fr   # combined
-node bin/install.js --uninstall              # restore previous statusline
+npx cc-peak-hours                            # minimal (default)
+npx cc-peak-hours --full                     # dashboard with timeline + rate limits
+npx cc-peak-hours --24h                      # force 24h time format
+npx cc-peak-hours --12h                      # force 12h time format
+npx cc-peak-hours --lang fr                  # French labels
+npx cc-peak-hours --full --24h --lang fr     # combined
+npx cc-peak-hours --uninstall                # restore previous statusline
 ```
 
 ## Modes
